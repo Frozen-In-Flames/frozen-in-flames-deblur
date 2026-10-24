@@ -49,7 +49,10 @@ check("privacy copy: image never leaves the device",
   html.includes("never leaves your device") && html.includes("no server"));
 check("honest first load copy present", html.includes("First load is heavy") &&
   html.includes("about") && html.includes("65 MB"));
-check("no tracking scripts", !/google-analytics|gtag|plausible|mixpanel|segment/i.test(html));
+// "segment" is matched as the tracker (segment.com / cdn.segment.com),
+// not as a bare substring: v0.3.0 added a blur setting NAMED
+// "segmented", which is a feature of the engine, not a tracker.
+check("no tracking scripts", !/google-analytics|gtag|plausible|mixpanel|segment\.com|cdn\.segment|analytics\.segment/i.test(html));
 
 const srcFiles = readdirSync(join(ROOT, "deblur")).filter((f) => f.endsWith(".py")).sort();
 const dstFiles = readdirSync(join(ROOT, "docs", "deblur")).filter((f) => f.endsWith(".py")).sort();

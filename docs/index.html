@@ -86,12 +86,21 @@
     capped at 900 pixels on its long side, because browser math is slow. The
     winning settings are then applied once, at full size, to your original photo.
     Restoration of a large photo can still take a while. The stage line under the
-    button always shows what the engine is doing.</p>
+    button always shows what the engine is doing. Two settings skip the working
+    copy and run their full analysis at full size, so they are slower still:
+    noise (strong denoise, no deconvolution, for grain with no blur to remove;
+    auto can also choose it when grain is what the photo actually has) and
+    segmented (the photo is sorted into foreground and background by an edge
+    mask, each region's blur is measured and removed separately, and the two
+    restorations are blended at the mask edge).</p>
     <p><strong>Honest limits.</strong> Classical processing sharpens and clarifies
-    what is in the image. It cannot invent real detail that heavy blur destroyed,
-    and blur that changes across one photo is only partly helped. Photos over
-    40 megapixels are refused with a message instead of being allowed to crash
-    the tab.</p>
+    what is in the image. It cannot invent real detail that heavy blur destroyed.
+    Segmented mode handles two regions, foreground and background, at tile
+    resolution; blur that varies smoothly or in more than two ways is only
+    partly helped. Very flat or very noisy photos can leave the estimator
+    little to measure, and the run report says what it found either way. Photos
+    over 40 megapixels are refused with a message instead of being allowed to
+    crash the tab.</p>
   </section>
 
   <section class="card">
@@ -112,6 +121,8 @@
           <option value="focus">focus: out of focus</option>
           <option value="gaussian">gaussian: general softness</option>
           <option value="lowres">low resolution: upscale only</option>
+          <option value="noise">noise: heavy grain, no blur to remove</option>
+          <option value="segmented">segmented: blur differs across the photo</option>
         </select>
       </div>
       <div class="field">
@@ -168,9 +179,11 @@
     reimplementation in another language: the same sweep, the same scoring,
     the same deconvolution.</p>
     <p>Two staging choices exist only because a browser is slow: blur
-    estimation runs on the capped working copy described above, and denoising
-    is skipped with a note in the run report if the OpenCV build in your
-    browser lacks it (the pinned build has it). No engine math changes.</p>
+    estimation runs on the capped working copy described above (except the
+    noise and segmented settings, which analyze at full size exactly as the
+    command line does), and denoising is skipped with a note in the run
+    report if the OpenCV build in your browser lacks it (the pinned build
+    has it). No engine math changes.</p>
     <p>Prefer the command line, or want to read the code? The repository is at
     <a href="https://github.com/Frozen-In-Flames/frozen-in-flames-deblur">github.com/Frozen-In-Flames/frozen-in-flames-deblur</a>.
     License: Apache-2.0, Copyright 2026 Aries Hilton.</p>
@@ -252,6 +265,10 @@ async function init() {
     "        open('output.png', 'wb').write(buf.tobytes())",
     "    return json.dumps({'blur_type': rep.blur_type, 'psf_params': rep.psf_params,",
     "                       'method': rep.method, 'manual': bool(rep.manual),",
+    "                       'noise_sigma': rep.noise_sigma,",
+    "                       'segment_mode': rep.segment_mode,",
+    "                       'mask_coverage': rep.mask_coverage,",
+    "                       'regions': rep.regions,",
     "                       'input_score': rep.input_score, 'output_score': rep.output_score,",
     "                       'input_size': list(rep.input_size), 'output_size': list(rep.output_size),",
     "                       'steps': list(rep.steps)})",
@@ -345,8 +362,21 @@ worker.onmessage = (e) => {
       "output       : " + r.output_size[0] + "x" + r.output_size[1],
       "score in/out : " + r.input_score.toFixed(5) + " -> " + r.output_score.toFixed(5) +
         "  (edge steepness, higher is sharper; compare at equal size)",
-      "steps        : " + r.steps.join("; "),
     ];
+    if (r.noise_sigma !== null && r.noise_sigma !== undefined) {
+      lines.push("noise sigma  : " + r.noise_sigma.toFixed(1) +
+        " gray levels (measured on the original)");
+    }
+    if (r.segment_mode) {
+      lines.push("segmented    : " + r.segment_mode +
+        (r.mask_coverage !== null && r.mask_coverage !== undefined
+          ? "  (foreground coverage " + r.mask_coverage.toFixed(1) + "%)" : ""));
+      for (const reg of r.regions || []) {
+        lines.push("  " + reg.name + " : " + reg.family + " " +
+          JSON.stringify(reg.params) + "  coverage " + reg.coverage.toFixed(1) + "%");
+      }
+    }
+    lines.push("steps        : " + r.steps.join("; "));
     $("report").textContent = lines.join("\n");
     $("resultsCard").classList.remove("hidden");
     setStage("Done. The restored photo is below, and the download button is ready.", false);

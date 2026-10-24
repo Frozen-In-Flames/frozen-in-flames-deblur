@@ -27,12 +27,29 @@ How the sweep scores a candidate PSF (all classical signal processing):
     candidate score = null_match - radial_resid
 
 * Motion gate (auto mode only). Motion is chosen in auto mode only if
-  the best motion candidate's null_match clears NULL_GATE: a real
-  motion fingerprint or nothing. Below the gate, auto decides between
-  focus and gaussian by score. Calibrated on the synthetic suite:
-  true motion scores 0.23-0.32, the strongest isotropic spoilers reach
-  0.11-0.14. Mild real-world motion blur can fall under the gate; pin
-  --type motion when you know.
+  the best motion candidate passes three guards (see
+  pipeline.select_psf): its null_match clears NULL_GATE, its
+  SPECIFICITY clears its bar (the match beats the longest kernel at
+  the same angle: chance correlation grows with kernel length and
+  piles up at the longest length with no interior peak, while a true
+  kernel's match peaks at its own length and falls), and the
+  isotropic evidence stays below its cap (a focus/gaussian winner
+  that strongly explains the radial spectrum is not overridden by a
+  coincidental directional match). Calibrated on the fixture battery
+  in TEST-REPORT.md: true motion null matches 0.11-0.29 with
+  specificity +0.11..+0.28; clean, isotropic and noise-only images
+  give specificity ~0. Mild real-world motion blur can fall under
+  the gate; pin --type motion when you know.
+
+* Detail layer. The scorer never sees the raw estimation image: it
+  sees the detail layer (the image minus its sigma-2 gaussian blur).
+  Flat regions and smooth gradients have no detail layer, so only
+  edge-rich regions vote, and the low frequencies where content
+  layout fringes live are removed while the band carrying the blur
+  fingerprint is kept. A spatially multiplied edge mask was tried
+  for this job and measured to corrupt the read (the mask's own
+  spectrum convolves into the fingerprint band); the detail layer
+  selects the same regions without imprinting anything.
 
 Why not score restorations by sharpness (the obvious approach): it was
 tried first and measured to fail. A wrong-PSF deconvolution manufactures
@@ -49,8 +66,88 @@ steepness tracks how concentrated the gradients are.
 import cv2
 import numpy as np
 
-NULL_GATE = 0.18
+NULL_GATE = 0.10
 _BORDER = 16  # px cropped before steepness: border effects live there
+
+
+# ---------------------------------------------------------------------------
+# Noise measurement (Immerkaer)
+# ---------------------------------------------------------------------------
+
+_IMMERKAER_KERNEL = np.array(
+    [[1, -2, 1], [-2, 4, -2], [1, -2, 1]], dtype=np.float64
+)
+
+
+def estimate_noise_sigma(gray):
+    """Noise standard deviation of a single-channel image, in gray levels.
+
+    Immerkaer's estimator (1994): convolve with the Laplacian-like
+    kernel [[1,-2,1],[-2,4,-2],[1,-2,1]], which annihilates smooth
+    image structure (locally planar patches give zero response), then
+    sigma = sqrt(pi/2) * mean|response| / 6, rescaled to the input's
+    range. Accepts float images in [0, 1] or uint8; the result is
+    always expressed in 0..255 gray levels so thresholds read the
+    same at any input scale.
+
+    One guard against the classical weakness of this estimator (real
+    edges are not planar either, so texture inflates it): the average
+    runs only over FLAT pixels, the half of the image with the lowest
+    local gradient magnitude, where the kernel response is noise and
+    essentially nothing else. Texture therefore cannot inflate the
+    reading, and the auto noise decision can trust the number.
+    """
+    g = np.asarray(gray)
+    if g.dtype == np.uint8:
+        g = g.astype(np.float64)
+        scale = 1.0
+    else:
+        g = g.astype(np.float64)
+        scale = 255.0 if g.max() <= 1.5 else 1.0
+    h, w = g.shape
+    if h < 3 or w < 3:
+        return 0.0
+    resp = cv2.filter2D(g, -1, _IMMERKAER_KERNEL)[1:-1, 1:-1]
+    gx = cv2.Sobel(g, cv2.CV_64F, 1, 0, ksize=3)[1:-1, 1:-1]
+    gy = cv2.Sobel(g, cv2.CV_64F, 0, 1, ksize=3)[1:-1, 1:-1]
+    mag = np.hypot(gx, gy)
+    flat = mag <= np.percentile(mag, 50)
+    n = int(flat.sum())
+    if n == 0:
+        return 0.0
+    sigma = np.sqrt(np.pi / 2.0) * float(np.abs(resp[flat]).sum()) / (6.0 * n)
+    return sigma * scale
+
+
+# ---------------------------------------------------------------------------
+# Edge selection: who gets to vote on the blur
+# ---------------------------------------------------------------------------
+
+def edge_density(L):
+    """Local edge density of a float luminance image: gradient
+    magnitude smoothed with a wide gaussian, so textured areas score
+    high and flat or merely noisy areas score low. Used by segmented
+    mode to judge which tiles carry evidence and to define regions."""
+    g = np.asarray(L, dtype=np.float64)
+    gx = cv2.Sobel(g, cv2.CV_64F, 1, 0, ksize=3)
+    gy = cv2.Sobel(g, cv2.CV_64F, 0, 1, ksize=3)
+    mag = np.hypot(gx, gy)
+    return cv2.GaussianBlur(mag, (0, 0), 6.0)
+
+
+def detail_layer(L, sigma=2.0):
+    """The detail layer of a float luminance image: the image minus
+    its gaussian blur at the given sigma. What remains is edges and
+    texture; flat regions, smooth gradients and slow layout fringes
+    are removed. This is the edge selection the spectral scorer
+    uses: scoring is driven by edge-rich regions because the input
+    IS the edge layer, and unlike a spatially multiplied mask it
+    imprints no spectrum of its own (measured: a feathered product
+    mask turned an exact 15 px / 30 degree read into 9 px / 9
+    degrees on the texture fixture; the detail layer reads it
+    exactly)."""
+    g = np.asarray(L, dtype=np.float64)
+    return g - cv2.GaussianBlur(g, (0, 0), sigma)
 
 
 # ---------------------------------------------------------------------------
