@@ -1,0 +1,5 @@
+numpy>=1.26
+opencv-python>=4.8
+scikit-image>=0.22
+# tests only:
+# pytest>=8.0
