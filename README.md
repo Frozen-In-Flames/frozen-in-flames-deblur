@@ -9,7 +9,11 @@ scikit-image, and numpy.
 It removes the three common single-image blurs, handles low
 resolution, treats noise-dominated photos without pretending they are
 blurred, and can restore foreground and background separately when
-the blur changes across one photo:
+the blur changes across one photo. Parameters are zoom-aware (a
+photo taken at a digital zoom reports its blur in sensor terms), a
+recorded-video mode deblurs whole clips frame by frame, and a live
+clarify view serves camera glasses and phone cameras as an
+accessibility aid (see "Camera glasses" below):
 
 | Setting (`--type`) | Problem | How it is undone |
 |---|---|---|
@@ -58,6 +62,17 @@ RELEASE-NOTES-v0.3.0.md; the page itself is `docs/index.html`, and
 `tools/sync_web_engine.py` keeps the copy of the package under
 `docs/deblur/` identical to `deblur/`, file for file.
 
+The companion **live clarify view** (`docs/live.html`, linked from
+the photo page) runs on a camera feed instead of a file: temporal
+noise reduction, CLAHE contrast, a de-smear step keyed to the
+camera motion it measures between frames by phase correlation, and
+sharpening that auto-scales with its zoom slider, all in plain
+JavaScript at a capped processing resolution, with a large instant
+on/off toggle and a button that captures a still and hands it to
+the full engine on the photo page. It is a clarify chain, not the
+engine, and it says so on the page. Its math lives in
+`docs/live-math.js` and is tested in Node like the rest.
+
 ## Install
 
 ```bash
@@ -88,8 +103,21 @@ python -m deblur noisy.jpg clean.png --type noise
 # with its own measured PSF:
 python -m deblur portrait.jpg fixed.png --type segmented
 
+# Photo taken at 2x digital zoom: the report (and any pin) speaks
+# sensor space, so the numbers mean the same blur as an unzoomed shot:
+python -m deblur zoomed.jpg fixed.png --type auto --zoom 2
+python -m deblur zoomed.jpg fixed.png --type motion --length 15 --angle 30 --zoom 2
+
+# A recorded clip (e.g. from camera glasses), deblurred frame by frame:
+python -m deblur video clip.mp4 clip_fixed.mp4
+python -m deblur video clip.mp4 clip_fixed.mp4 --sample-every 6 --method wiener
+
 # Options: --method wiener|rl-tv|rl (default rl-tv), --upscale 3840|none,
-#          --no-denoise, --noise-h H (noise path denoise floor, default 10)
+#          --no-denoise, --noise-h H (noise path denoise floor, default 10),
+#          --zoom Z (digital zoom the image was taken at, default 1).
+#          Video adds: --sample-every N (default 12),
+#          --estimate-max-side PX (default 480); its --method default
+#          is wiener, the fast method, and there is no upscale.
 ```
 
 Every run prints what it decided, so a run can be audited:
@@ -221,6 +249,57 @@ The run report (CLI and the `Report` object) exposes the mask's
 foreground coverage %, each region's family and parameters, and
 whether per-region restoration or the fallback was used.
 
+## Camera glasses: zoom, recorded video, and the live view
+
+The toolkit's glasses architecture (full note: `docs/glasses.md`)
+is the split the open camera-glasses class is built on: the glasses
+are the camera, the paired device does the processing, and there
+are two modes at two honestly labeled speeds.
+
+**Zoom.** Digital zoom crops the sensor image and enlarges the
+crop, so a sensor blur of B px spans z*B px in the view at zoom z.
+With `--zoom z` (or `Settings.zoom`), estimates are still measured
+on the image as given (view space), but the report converts them to
+**sensor space** (view / z), and manual pins are read as sensor
+space and restored with the view-space kernel pin × z. Angles never
+scale. On a swept run the zoom changes no pixels, only what the
+numbers mean; on a pinned run it is what makes the pin the same
+physical blur at any zoom. Without it, a 2x-zoomed photo's blur
+reads about twice the sensor truth, which is exactly the miss the
+zoom factor exists to remove.
+
+**Recorded video.** `python -m deblur video in.mp4 out.mp4`
+deblurs a whole clip (the wearer's recorded content, processed
+afterward on the companion). The PSF is estimated on sampled
+frames only (`--sample-every`, default 12) on a downscaled working
+copy; the samples are median-smoothed within runs of one family and
+interpolated into a per-frame track, so the restoration kernel
+cannot jitter frame to frame (family changes step at the midpoint
+between samples, and frames the estimator calls noise or identity
+get those treatments locally, not a held blur kernel). Each frame
+is then restored from the pipeline's own pieces with the fast
+method by default (`--method wiener`; rl-tv is available at its
+per-frame price). Frames are written at native size; segmented is
+a stills setting and is refused for video. The summary prints the
+sampled estimates and the measured seconds per frame. Measured on
+the calibration clip (448×320, 30 frames, this project's test VM):
+0.59 s/frame overall, track correlation 0.99 against the known
+blur curve. This is an afterward job, not a live one.
+
+**Live view.** `docs/live.html` (see Browser demo above) is the
+accessibility mode: a fast clarify chain on the live camera feed
+with an instant toggle, a zoom slider whose clarity strength
+auto-scales, a phase-correlation readout of the camera's measured
+motion, and a capture button that hands a frozen frame to the full
+engine. What it is not is the engine running live; no honest chain
+at this classical cost is.
+
+**The named next step** is IMU-aided PSF: glasses carry gyros, and
+motion blur during an exposure is angular velocity × exposure time.
+The smear can be computed at its source instead of estimated from
+pixels, with the pixel estimator as fallback and arbiter. See
+`docs/glasses.md`.
+
 ## Pipeline order, and why
 
 0. **Measure the noise** on the untouched input (Immerkaer). The
@@ -290,6 +369,20 @@ whether per-region restoration or the fallback was used.
   sweep reads radius 3.0 for a true 4 (within its ±1.5 tolerance);
   motion recovery is exact, including under sigma-12 noise and on
   the 800 px gradient fixture that read 12 degrees off in v0.2.0.
+* The estimator's proven envelope is motion kernels up to about
+  21 px in the space it measures. At 25-30 px native it under-reads
+  or declines on the suite fixtures (a 30 px kernel has destroyed
+  most of the fingerprint band). This bounds zoom too: at 2x zoom a
+  15 px sensor blur is a 30 px view kernel, so the zoom conversion
+  applies exactly but the underlying auto read can be weak; pin the
+  parameters when you know them. Measured values: TEST-REPORT.md.
+* Video mode inherits every stills limit, plus its own: the track
+  assumes the blur changes slowly between sampled frames (a whip
+  pan or a cut inside a clip will be tracked at sample resolution,
+  and a cut's frames step at the midpoint between samples), and the
+  per-frame cost is the stills cost divided by nothing. The live
+  clarify chain sharpens and contrasts the captured feed; it does
+  not recover detail the sensor never recorded.
 * If you have several shots of the same scene, aligning and stacking
   them (multi-frame super-resolution) beats any single-image method,
   including this one.
@@ -308,7 +401,17 @@ input, and wins over negative controls (wrong-PSF and sharpen-only
 restorations). The v0.3.0 suite (`tests/test_v030.py`) adds the noise
 oracle, the three estimation failure shapes rebuilt synthetically, and
 the segmented composite oracle with its wrong-kernel controls and seam
-discipline. One regression test guards a real upstream defect found
+discipline. The v0.4.0 suite (`tests/test_v040.py`) adds the zoom
+oracles (sensor-space reporting inside the estimator's proven envelope,
+exact pin conversion, the no-zoom control missing by ~2×) and the
+recorded-video oracle (a synthetic clip with a known time-varying blur:
+output sharpness, track recovery against the truth curve, and temporal
+discipline against an unsmoothed per-frame control). The live page's
+math is tested in Node (`web-test/live_math.test.mjs`: phase-correlation
+shift recovery, the de-smear step measured by physical edge width,
+the zoom/temporal policy rules) and both pages carry static checks
+(`web-test/static_checks.mjs`, `web-test/live_static_checks.mjs`).
+One regression test guards a real upstream defect found
 during development: scikit-image 0.26's `unsharp_mask(channel_axis=-1)`
 slices the wrong axis and returns a destroyed image; the pipeline loops
 channels itself (see `deblur/pipeline.py: unsharp_rgb`). Full numbers in

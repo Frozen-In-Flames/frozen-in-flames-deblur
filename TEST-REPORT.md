@@ -286,3 +286,148 @@ boundary; recorded as a limit below, not tuned away.
   gaussian mode reads σ2.2 for truth 2.0 (the v0.1 fit bias of
   +0.4…+0.8 is reduced to +0.2); focus mode reads r3.0 for truth 4
   (Δ −1.0, inside the ±1.5 tolerance). Motion remains unbiased.
+
+
+# Test Report — v0.4.0 additions
+
+Scope: the zoom-aware core, recorded-video mode, the live clarify
+page, and the estimator-envelope measurement that bounds the zoom
+claims. Full suite: **41 passed** (25 carried from v0.3.0, 16 new in
+`tests/test_v040.py`), 149 s. Web: static checks 13/13 (index) and
+25/25 (live, new file `web-test/live_static_checks.mjs`); live-math
+behavior tests 18/18 (`web-test/live_math.test.mjs`); glue test and
+browser parity re-run after the staging change, both green (parity
+unchanged: length 15 / angle 30 both sides, steepness ratio 2.870
+native vs 2.866 Pyodide). All measurements below were taken on this
+project's test VM before the suite's thresholds were fixed.
+
+## The estimator-envelope measurement (why the zoom oracle is scoped)
+
+The brief's zoom simulation (blur B on the sensor, center crop,
+upscale by z) makes the view-space kernel z*B. Before fixing the
+oracle, the estimator was probed at long kernels, native and on
+upscaled content (textured 800 px source, GT 800, GT 400):
+
+* native 21/30 reads 21/27 (textured), 21/27 (GT 800);
+* native 25/30 reads **identity**; native 30/30 reads **identity**
+  (textured), **noise** (GT 800), and 9/24 on GT 400 at both 21 and
+  30 (the smaller frame's evidence thins first);
+* a genuine 30/30 control on upscaled content reads 19/12; a
+  genuine 20/30 control reads 21/27.
+
+Conclusion, stated as a limit rather than engineered around: the
+estimator's proven envelope is kernels up to ~21 px in the space it
+measures; beyond it the fingerprint band is too destroyed to read.
+The zoom oracle is therefore fixed at sensor 10 px / zoom 2
+(effective view kernel 20 px, inside the envelope), and the brief's
+15 px case (effective 30 px) is asserted for CONVERSION EXACTNESS
+(the mechanism under test) with its absolute read recorded below as
+a documented gap.
+
+## Zoom thresholds (fixed before the suite ran) and measured results
+
+* End-to-end (textured 800, sensor blur 10/30, center crop 400,
+  upscale 2x LINEAR): zoom=2 must report family motion, sensor
+  length within ±4 of 10, angle within ±10 of 30, view kernel
+  within ±6 of 20. **Measured: length 11.5 (Δ1.5), angle 27 (Δ3),
+  view 23 (Δ3).**
+* Negative control, same view at zoom=1: the reported length must
+  miss the sensor truth by ≥ 8 px (~2x). **Measured: 23, Δ13.**
+* Sweep discipline: zoom=1 and zoom=2 outputs pixel-identical,
+  families agree, sensor(zoom=2) == reading(zoom=1) / 2 exactly, on
+  both the 10 px and the 15 px fixtures. **Measured: exact on both;
+  the 15 px fixture's view read is 23/15 (angle Δ15 — the envelope
+  gap, recorded, not asserted against).**
+* Pin path on the 15 px fixture: pin {15, 30} at zoom=2 reports
+  {15.0, 30.0}, restores with view {30.0, 30.0}, output identical
+  to pinning {30, 30} at zoom=1, and beats the ignore-the-zoom
+  control (pin {15, 30} at zoom=1) by ≥ 1.25x output steepness.
+  **Measured: exact; steepness 0.5813 vs 0.3581, 1.62x.**
+* CLI smoke asserts the printed sensor params and the zoom line
+  naming the view-space kernel. Settings rejects zoom ≤ 0.
+
+## Video thresholds and measured results
+
+Synthetic clip (the suite fixture): textured 720 scene, slow pan
+(2 px/frame), 448x320 x 30 frames, motion length easing 10 → 20 px
+(smoothstep) at a fixed 30 degrees, noise sigma 3, mp4v-encoded;
+the tool decodes it itself. `--sample-every 6`, method wiener.
+
+* (i) mean output edge steepness ≥ 1.5x the decoded input's.
+  **Measured: 0.4407 → 1.3672, 3.10x.**
+* (ii) sampled families all motion; track angles within ±10 deg of
+  30 at sampled frames; length-track correlation with the truth
+  curve ≥ 0.85; mean abs length error ≤ 4 px. **Measured: samples
+  (frame: length/angle) 0: 11/27, 6: 11/27, 12: 13/30, 18: 17/30,
+  24: 19/27 against truth 10.5/11.3/13.8/17.2/19.4 at 30 deg;
+  correlation 0.988; mean abs error 0.72 px.**
+* (iii) temporal discipline: the smoothed track's max frame-to-frame
+  length change ≤ 1.5 px, and an unsmoothed per-frame-estimation
+  control on the same decoded frames must jump ≥ 1.5x as much.
+  **Measured: smoothed 0.67 px; control 2.00 px (2.99x).** The
+  control's jumps are the sweep's 2 px length quantization stepping
+  as the true blur eases; the median + interpolation removes
+  exactly that class of jitter.
+* Cost, reported not hidden: analysis 5.6 s + render 12.1 s =
+  **0.59 s/frame overall** at 448x320 on this VM (the tiny CLI smoke
+  clip measured 0.39 s/frame at 320x240).
+* Track units (no video): interpolation hits the midpoint exactly;
+  angle interpolation wraps the short way (175 → 5 passes through
+  0, never 90); a family change steps at the midpoint and never
+  blends a hybrid kernel; median-of-3 kills a one-sample spike
+  (10, 30, 12 → 12); segmented and missing input raise in words.
+
+## Live page: thresholds and measured results
+
+The de-smear step was validated PHYSICALLY, not by a sharpness
+score, after the calibration showed why: on an edge-dominated
+synthetic, sharpening along the WRONG direction scored steepness
+2.74 against the correct direction's 1.65 (sharpness metrics reward
+ghost edges in any direction — the same trap scoring.py documents
+for the stills sweep). The honest instrument is edge transition
+width on a known step edge:
+
+* Phase correlation (128x64 analysis size) recovers synthetic
+  translations within 1.0 px per axis with response ≥ 0.5;
+  zero-shift control |shift| ≤ 0.6; flat frames give no coherent
+  reading. **Measured: errors ≤ 0.03 px on (5,-3), (-7,4), (2,6);
+  zero control 0.00; flat response 0.000.**
+* A 9 px box smear widens a step edge's 10-90% width to 8 px; one
+  de-smear step at the operating strength 0.5 must narrow it to
+  ≤ 7 px with ringing ≤ 0.08 past the plateaus. **Measured: 6 px;
+  profile range [0.097, 0.903] against plateaus 0.15/0.85 (ringing
+  0.053).** Strengths above 0.5 narrowed no further and rang harder
+  (1.2 → ±0.127), which is why the page operates at 0.5.
+* Policy rules: clarityForZoom is the identity at 1x, monotonic,
+  capped at 2.2x base; temporalAlpha starts at 0.55 and decays
+  monotonically with measured motion inside [0, 0.8]. **Measured:
+  zoom factors 1.00/1.40/1.80/2.20 at 1-4x; alpha 0.550/0.306/
+  0.183/0.110 at 0/2/5/10 px per frame.**
+* Processing resolution is capped at 640 px wide; the page prints
+  its real frame rate and processing size. No FPS number is
+  claimed here: it is a property of the user's device, measured
+  there, by design.
+
+## Known limits (measured, not hidden)
+
+* **The estimator envelope bounds zoom.** Kernels ≳ 21-25 px in
+  the measured space under-read or decline (native 25/30 and 30/30
+  above). A strong sensor blur at high zoom lands there: the zoom
+  conversion stays exact, the auto read may not. Pins are the
+  answer when the blur is known.
+* **The live chain is clarification, not restoration.** One
+  de-smear step buys back about a quarter of a 9 px smear's edge
+  width at the operating strength; the temporal blend and CLAHE
+  clean and lift, they do not recover destroyed detail. The full
+  engine remains the tool for anything that matters, via the
+  capture-still handoff.
+* **Video track assumptions.** Blur is assumed to change slowly
+  between sampled frames; a cut or whip pan inside a clip is
+  tracked at sample resolution and steps at the midpoint sample.
+  Noise sigma is measured per sampled frame on the full frame and
+  the clip uses the median; a clip whose noise changes drastically
+  mid-way gets the median's denoise strength throughout.
+* **Video mode is two full decodes** (analysis, then render) — the
+  price of knowing the whole track before rendering. Long clips
+  pay it linearly; there is no streaming mode.
+
