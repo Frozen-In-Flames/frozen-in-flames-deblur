@@ -116,3 +116,10 @@ suite is unchanged and still passes 14 of 14.
 ## License
 
 Apache-2.0, Copyright 2026 Aries Hilton.
+
+## Live verification (October 24, 2026, main-side, real browser on the published page)
+
+- First live run caught a real defect: GitHub Pages dropped `deblur/__init__.py` (Jekyll ignores underscore files), so the in-browser engine could not load. Fixed with `docs/.nojekyll` (commit 9fb4a1e) and retested.
+- Parity, third confirmation: on an 800 px textured fixture blurred at motion 15 px / 30 degrees, the live page reported motion, length 13, angle 42; the native staged estimator on the identical file reports motion, length 13, angle 42. The browser engine and the desktop engine agree exactly; the angle offset on this fixture is an estimator property (its large smooth gradient biases the read), documented here rather than hidden, and it is part of what the v0.2.1 edge-masked estimation work addresses. On the 400 px suite fixture the same estimator recovers 15 / 30 exactly (pytest).
+- On a flat, low-texture fixture the estimator (browser and native identically) reads a 15 px / 30 degree motion blur as focus radius 8. Low-texture content is a documented estimator limit, not a browser defect.
+- The completed live runs produced visibly sharper textured detail and an enabled PNG download, as designed.
