@@ -60,6 +60,15 @@ v0.3.0 estimation changes (each one answers a measured failure):
     mask sorts foreground from background, each region's PSF is
     estimated separately, the frame is restored once per region and
     composited through the feathered mask. See segment_image().
+
+v0.4.0 zoom awareness: Settings.zoom states the digital zoom of the
+view the image came from. A zoom of z enlarges a center crop, so a
+blur of B px on the sensor measures z*B px in the view. Estimates
+are measured on the image as handed in (view space); the Report
+converts them to sensor space (view / zoom) so readings are
+comparable across zoom levels, records the view-space kernel that
+was actually restored with, and manual pins are accepted in sensor
+space and restored at pin * zoom. See _split_sensor_view().
 """
 
 from dataclasses import dataclass, field, replace
@@ -144,6 +153,37 @@ def _denoise_h_for(noise_sigma):
 def _angle_diff(a, b):
     d = abs((a - b) % 180.0)
     return min(d, 180.0 - d)
+
+
+_PSF_SCALE_KEYS = {"motion": ("length",), "focus": ("radius",),
+                   "gaussian": ("sigma",)}
+
+
+def _scale_psf_params(family, params, k):
+    """One family's parameters scaled by k. Lengths, radii and
+    sigmas scale with image size and with zoom; angles never do."""
+    out = dict(params)
+    for key in _PSF_SCALE_KEYS.get(family, ()):
+        if key in out:
+            out[key] = float(out[key]) * k
+    return out
+
+
+def _split_sensor_view(settings, family, raw_params):
+    """Split one select_psf result into (sensor-space, view-space).
+
+    A swept estimate is measured on the image as handed in, so the
+    raw parameters ARE the view-space kernel and the sensor-space
+    reading is raw / zoom. A manual pin is stated by the caller in
+    sensor space, so the raw parameters are the sensor reading and
+    the view-space kernel is raw * zoom. Either way the restoration
+    uses the view-space entry. At zoom 1.0 the two are identical.
+    """
+    if settings.manual_family() is not None:
+        return dict(raw_params), _scale_psf_params(
+            family, raw_params, settings.zoom)
+    return _scale_psf_params(family, raw_params, 1.0 / settings.zoom), \
+        dict(raw_params)
 
 
 def unsharp_rgb(rgb, radius, amount):
@@ -347,6 +387,12 @@ class Report:
     segment_mode: str = ""      # "" | "per-region" | "fallback"
     mask_coverage: object = None  # foreground coverage %, segmented only
     regions: list = field(default_factory=list)  # per-region estimate dicts
+    # v0.4.0 additions. psf_params (and regions[].params) are stated
+    # in SENSOR space when zoom != 1 (see _split_sensor_view);
+    # view_psf_params records the kernel the restoration of the
+    # handed-in image actually used (identical at zoom 1.0).
+    zoom: float = 1.0
+    view_psf_params: dict = field(default_factory=dict)
 
 
 def _luminance(bgr_u8):
@@ -668,7 +714,8 @@ def enhance_image(image, settings=None):
             raise ValueError("expected a BGR uint8 image array or a file path")
         img = img.copy()
 
-    report = Report(blur_type=settings.blur_type, method=settings.method)
+    report = Report(blur_type=settings.blur_type, method=settings.method,
+                    zoom=settings.zoom)
     report.input_size = (img.shape[1], img.shape[0])
     report.input_score = score_image(_gray_float(img))
     # Noise is measured on the untouched input, before any denoise
@@ -745,7 +792,13 @@ def enhance_image(image, settings=None):
         est_L = _estimation_luminance(orig, report.noise_sigma)
         seg = segment_image(est_L, settings)
         report.segment_mode = seg["mode"]
-        report.regions = seg["regions"]
+        # Region estimates are measured on the image as handed in
+        # (view space); the report states them in sensor space.
+        report.regions = [
+            {**r, "params": _scale_psf_params(
+                r["family"], r["params"], 1.0 / settings.zoom)}
+            for r in seg["regions"]
+        ]
         report.mask_coverage = (
             next((r["coverage"] for r in seg["regions"]
                   if r["name"] == "foreground"), None)
@@ -763,19 +816,30 @@ def enhance_image(image, settings=None):
                 + (1.0 - m) * rest_bg.astype(np.float32),
                 0, 255,
             ).astype(np.uint8)
-            report.psf_params = fg["params"]
+            report.psf_params = _scale_psf_params(
+                fg["family"], fg["params"], 1.0 / settings.zoom)
+            report.view_psf_params = fg["params"]
             report.steps.append(
                 f"deconv[{settings.method}] segmented per-region: "
                 f"foreground={fg['family']} {fg['params']}, "
                 f"background={bg['family']} {bg['params']}, "
                 f"mask feathered, foreground coverage "
                 f"{report.mask_coverage:.1f}%"
+                + (f" (region params view-space; report states "
+                   f"sensor-space at zoom {settings.zoom:g})"
+                   if settings.zoom != 1.0 else "")
             )
         else:
             family, params, ranked, null_match = select_psf(
                 est_L, replace(settings, blur_type="auto"),
                 noise_sigma=report.noise_sigma,
             )
+            if settings.zoom != 1.0 and settings.manual_family() is None:
+                ranked = [
+                    (fam, _scale_psf_params(fam, p, 1.0 / settings.zoom),
+                     s, nm)
+                    for fam, p, s, nm in ranked
+                ]
             if family == "noise":
                 report.blur_type = "noise"
                 report.candidates = ranked[:5]
@@ -788,13 +852,17 @@ def enhance_image(image, settings=None):
                     f"segmented fallback: {seg['reason']})"
                 )
                 return _finish_tail(img, settings, report)
+            params_sensor, params_view = _split_sensor_view(
+                settings, family, params)
             report.blur_type = family
-            report.psf_params = params
+            report.psf_params = params_sensor
+            report.view_psf_params = params_view
             report.null_match = null_match
             report.candidates = ranked[:5]
-            img = _deconvolve_bgr(get_base(), family, params, settings)
+            img = _deconvolve_bgr(get_base(), family, params_view, settings)
             report.steps.append(
-                f"deconv[{settings.method}] family={family} params={params} "
+                f"deconv[{settings.method}] family={family} "
+                f"params={params_view} "
                 f"(segmented fallback: {seg['reason']})"
             )
     else:
@@ -804,6 +872,11 @@ def enhance_image(image, settings=None):
         )
         report.manual = settings.manual_family() is not None
         report.null_match = null_match
+        if settings.zoom != 1.0 and settings.manual_family() is None:
+            ranked = [
+                (fam, _scale_psf_params(fam, p, 1.0 / settings.zoom), s, nm)
+                for fam, p, s, nm in ranked
+            ]
         report.candidates = ranked[:5]
         if family == "noise":
             report.blur_type = "noise"
@@ -814,12 +887,16 @@ def enhance_image(image, settings=None):
                 "deconv skipped (identity: no blur evidence)"
             )
             return _finish_tail(img, settings, report)
+        params_sensor, params_view = _split_sensor_view(
+            settings, family, params)
         report.blur_type = family
-        report.psf_params = params
-        img = _deconvolve_bgr(get_base(), family, params, settings)
-        report.steps.append(
-            f"deconv[{settings.method}] family={family} params={params}"
-        )
+        report.psf_params = params_sensor
+        report.view_psf_params = params_view
+        img = _deconvolve_bgr(get_base(), family, params_view, settings)
+        step = f"deconv[{settings.method}] family={family} params={params_view}"
+        if settings.zoom != 1.0:
+            step += f" (sensor-space {params_sensor}, zoom {settings.zoom:g})"
+        report.steps.append(step)
 
     return _finish_tail(img, settings, report)
 

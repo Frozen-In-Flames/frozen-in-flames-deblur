@@ -34,6 +34,25 @@ class Settings:
     angle: Optional[float] = None    # motion, degrees
     radius: Optional[float] = None   # focus (defocus disk)
     sigma: Optional[float] = None    # gaussian
+    # Digital zoom of the view the image was taken from (1.0 = no
+    # zoom). Semantics: a camera that zooms digitally by z crops the
+    # sensor image and enlarges the crop, so a blur that spans B px
+    # on the sensor spans z*B px in the zoomed view. Everything the
+    # estimator measures on the image as handed in is therefore in
+    # VIEW space; everything a user pins by hand (length / radius /
+    # sigma above) is stated in SENSOR space, and the report speaks
+    # sensor space too, so numbers stay comparable across zoom
+    # levels: sensor = view / zoom, and a pin is restored with the
+    # view-space kernel pin * zoom. Angles never scale. Restoration
+    # always deconvolves the image as given with the view-space
+    # kernel, so with a swept estimate zoom relabels the report and
+    # changes nothing in the pixels; with a manual pin it is what
+    # makes the pin mean the same physical blur at any zoom.
+    zoom: float = 1.0
+
+    def __post_init__(self):
+        if not (self.zoom > 0):
+            raise ValueError(f"zoom must be > 0, got {self.zoom!r}")
 
     def manual_family(self):
         """Family implied by pinned parameters, or None if sweeping."""
