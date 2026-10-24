@@ -17,6 +17,40 @@ common problem, low resolution:
 | `lowres` | Image is just small | No deconvolution: Lanczos upscale to target + gentle sharpen + CLAHE |
 | `auto` | You don't know which one you have | Sweeps all families; motion must prove itself with a spectral fingerprint (see below) |
 
+## Browser demo
+
+**Live page: https://frozen-in-flames.github.io/frozen-in-flames-deblur/**
+
+Drop in any blurred photo and get the restored photo back, right in the
+browser. There is no server and no upload: the page loads the engine
+once and runs this repository's own Python package under Pyodide
+(Python on WebAssembly, pinned to version 0.29.5, with numpy, scipy,
+OpenCV and scikit-image from the Pyodide package set), so your image
+never leaves your device.
+
+Two staging choices exist only because browser math is slow, and both
+live in `deblur/browser.py`:
+
+* Blur estimation (the PSF sweep) runs on a working copy capped at
+  900 px on its long side. The winning parameters are scaled back to
+  native size and pinned, then the normal pipeline restores the full
+  resolution image once. At or under the cap the scale factor is 1.0
+  and the browser path returns exactly what the CLI returns.
+* If the OpenCV build in the browser lacks
+  `fastNlMeansDenoisingColored`, the denoise step is skipped and the
+  run report says so. (The pinned build has it; the guard has never
+  triggered in testing.)
+
+First load is heavy: the runtime and libraries total about 65 MB of
+downloads, which can take a minute or more on a slow connection. The
+browser caches them, so later visits start much faster. Restoration
+of a large photo still takes a while, and photos over 40 megapixels
+are refused with a plain message. Details and the measured parity
+numbers (browser engine vs native, same fixture) are in
+RELEASE-NOTES-v0.2.0.md; the page itself is `docs/index.html`, and
+`tools/sync_web_engine.py` keeps the copy of the package under
+`docs/deblur/` identical to `deblur/`, file for file.
+
 ## Install
 
 ```bash

@@ -1,0 +1,1 @@
+{"dependencies":{"pyodide":"0.29.5"},"description":"Node-level Pyodide parity and static checks for docs/index.html. Not part of the shipped package.","name":"frozen-in-flames-deblur-web-test","private":true,"scripts":{"parity":"node parity.mjs","static":"node static_checks.mjs"},"type":"module","version":"0.2.0"}
