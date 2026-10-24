@@ -1,10 +1,13 @@
 """Command line interface.
 
-    python -m deblur input output --type auto|motion|focus|gaussian|lowres
+    python -m deblur input output
+        --type auto|motion|focus|gaussian|lowres|noise|segmented
         [--length N --angle DEG --radius R --sigma S]
         [--method wiener|rl-tv|rl] [--upscale 3840|none] [--no-denoise]
+        [--noise-h H]
 
-Every run prints the chosen blur type, the PSF parameters, and the
+Every run prints the chosen blur type, the PSF parameters, the
+measured noise, the region estimates in segmented mode, and the
 scores, so the run can be audited after the fact.
 """
 
@@ -21,14 +24,17 @@ def build_parser():
     p = argparse.ArgumentParser(
         prog="deblur",
         description="Classical (no AI) deblurring and enhancement: "
-                    "motion, focus, gaussian, and low-resolution settings.",
+                    "motion, focus, gaussian, low-resolution, noise, "
+                    "and segmented (per-region) settings.",
     )
     p.add_argument("input", help="input image path")
     p.add_argument("output", help="output image path")
     p.add_argument(
         "--type", default="auto",
-        choices=["auto", "motion", "focus", "gaussian", "lowres"],
-        help="blur type setting (default: auto = sweep all families)",
+        choices=["auto", "motion", "focus", "gaussian", "lowres",
+                 "noise", "segmented"],
+        help="blur type setting (default: auto = sweep all families; "
+             "auto also picks the noise path when grain dominates)",
     )
     p.add_argument("--length", type=float, default=None,
                    help="motion: pin blur length in px (skips the sweep)")
@@ -44,7 +50,11 @@ def build_parser():
     p.add_argument("--upscale", default="3840",
                    help="target long side in px, or 'none' (default: 3840)")
     p.add_argument("--no-denoise", action="store_true",
-                   help="skip the light denoise pass")
+                   help="skip the restoration denoise pass (blur "
+                        "estimation still measures on a denoised copy)")
+    p.add_argument("--noise-h", type=float, default=None,
+                   help="strong denoise strength for the noise path "
+                        "(default: 10)")
     return p
 
 
@@ -60,6 +70,8 @@ def main(argv=None):
         radius=args.radius,
         sigma=args.sigma,
     )
+    if args.noise_h is not None:
+        settings.noise_h = args.noise_h
     img = cv2.imread(args.input)
     if img is None:
         print(f"error: could not load {args.input!r}", file=sys.stderr)
@@ -74,6 +86,16 @@ def main(argv=None):
           + ("  (manual parameters)" if report.manual else ""))
     if report.psf_params:
         print(f"psf params   : {report.psf_params}")
+    if report.noise_sigma is not None:
+        print(f"noise sigma  : {report.noise_sigma:.1f} gray levels "
+              f"(Immerkaer estimate on the original)")
+    if report.segment_mode:
+        print(f"segmented    : {report.segment_mode}"
+              + (f"  (foreground coverage {report.mask_coverage:.1f}%)"
+                 if report.mask_coverage is not None else ""))
+        for reg in report.regions:
+            print(f"  {reg['name']:10s} : {reg['family']} {reg['params']}  "
+                  f"coverage {reg['coverage']:.1f}%")
     print(f"method       : {report.method}")
     if report.candidates:
         print("top candidates (family, params, score, null_match):")

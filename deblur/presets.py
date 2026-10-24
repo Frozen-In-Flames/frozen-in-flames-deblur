@@ -8,19 +8,27 @@ radius, sigma) pin the sweep off and restore with exactly those values.
 from dataclasses import dataclass
 from typing import Optional
 
-BLUR_TYPES = ("auto", "motion", "focus", "gaussian", "lowres")
+BLUR_TYPES = ("auto", "motion", "focus", "gaussian", "lowres", "noise",
+              "segmented")
 
 
 @dataclass
 class Settings:
     blur_type: str = "auto"          # auto | motion | focus | gaussian | lowres
+                                     # | noise | segmented
     method: str = "rl-tv"            # wiener | rl-tv | rl
-    denoise: bool = True             # light fastNlMeans pass before deconvolution
+    denoise: bool = True             # fastNlMeans pass before deconvolution;
+                                     # strength scales with measured noise
     upscale: Optional[int] = 3840    # target long side in px; None disables
     clahe_clip: float = 1.8          # CLAHE clip limit, applied last
     unsharp_radius: float = 2.0
     unsharp_amount: float = 1.2      # gentle; 2.5 (the original paste) halos
     wiener_balance: float = 0.01
+    noise_h: float = 10.0            # noise path denoise strength floor;
+                                     # the path raises it to 1.4x the
+                                     # measured noise sigma when heavier
+                                     # (fastNlMeans only bites when the
+                                     # strength is comparable to the noise)
     # Manual PSF overrides (pin these to skip the sweep)
     length: Optional[float] = None   # motion
     angle: Optional[float] = None    # motion, degrees
@@ -55,5 +63,7 @@ PRESETS = {
     "focus": Settings(blur_type="focus", method="rl-tv"),
     "gaussian": Settings(blur_type="gaussian", method="rl-tv"),
     "lowres": Settings(blur_type="lowres", method="rl-tv", upscale=3840),
+    "noise": Settings(blur_type="noise", method="rl-tv"),
+    "segmented": Settings(blur_type="segmented", method="rl-tv"),
     "auto": Settings(blur_type="auto", method="rl-tv"),
 }
