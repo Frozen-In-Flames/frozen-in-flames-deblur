@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Frozen In Flames Deblur - classical deblurring in your browser</title>
+<meta name="description" content="Remove motion blur, focus blur and softness from a photo, classically, with no AI and no server. The image never leaves your device.">
+<style>
+  :root {
+    --bg: #101014; --panel: #1a1a21; --panel2: #22222c; --line: #34343f;
+    --text: #ececf1; --dim: #a7a7b5; --fire: #ff7a29; --ice: #57c7ff;
+    --ok: #63d68a; --err: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--text); line-height: 1.5; }
+  main { max-width: 1060px; margin: 0 auto; padding: 28px 18px 60px; }
+  h1 { font-size: 2rem; margin: 0 0 4px; }
+  h1 .fire { color: var(--fire); } h1 .ice { color: var(--ice); }
+  .tagline { color: var(--dim); margin: 0 0 22px; font-size: 1.05rem; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+          padding: 18px; margin-bottom: 18px; }
+  .card h2 { margin: 0 0 10px; font-size: 1.1rem; }
+  .card p { margin: 6px 0; color: var(--dim); }
+  .card p strong, .card li strong { color: var(--text); }
+  ul { margin: 6px 0; padding-left: 20px; color: var(--dim); }
+  #drop { border: 2px dashed var(--line); border-radius: 12px; padding: 34px 18px;
+          text-align: center; cursor: pointer; background: var(--panel2); }
+  #drop.drag { border-color: var(--ice); }
+  #drop p { margin: 4px 0; color: var(--dim); }
+  #drop .big { font-size: 1.15rem; color: var(--text); }
+  .controls { display: flex; flex-wrap: wrap; gap: 14px; align-items: end; margin-top: 16px; }
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field label { font-size: 0.85rem; color: var(--dim); }
+  select, button { font-size: 1rem; padding: 9px 12px; border-radius: 8px;
+                   border: 1px solid var(--line); background: var(--panel2); color: var(--text); }
+  button { cursor: pointer; }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  #run { background: var(--fire); border-color: var(--fire); color: #16100b; font-weight: 700; }
+  #download { display: none; background: var(--ice); border-color: var(--ice);
+              color: #0b141a; font-weight: 700; text-decoration: none;
+              padding: 9px 12px; border-radius: 8px; font-size: 1rem; }
+  .check { flex-direction: row; align-items: center; gap: 8px; padding-bottom: 9px; }
+  .check label { font-size: 1rem; color: var(--text); }
+  #stage { display: flex; align-items: center; gap: 10px; margin-top: 16px; min-height: 26px; }
+  #spinner { width: 18px; height: 18px; border-radius: 50%; flex: none;
+             border: 3px solid var(--line); border-top-color: var(--fire);
+             animation: spin 0.9s linear infinite; visibility: hidden; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #stageText { color: var(--dim); }
+  #error { color: var(--err); margin-top: 10px; white-space: pre-wrap; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 700px) { .pair { grid-template-columns: 1fr; } }
+  figure { margin: 0; }
+  figure img { width: 100%; border-radius: 8px; border: 1px solid var(--line);
+               background: #000; min-height: 80px; object-fit: contain; }
+  figcaption { color: var(--dim); font-size: 0.9rem; margin-top: 6px; text-align: center; }
+  #report { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.88rem;
+            white-space: pre-wrap; word-break: break-word; color: var(--text); margin: 0; }
+  .hidden { display: none; }
+  footer { color: var(--dim); font-size: 0.9rem; margin-top: 26px; }
+  footer a, .card a { color: var(--ice); }
+  code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1><span class="fire">Frozen In Flames</span> <span class="ice">Deblur</span></h1>
+    <p class="tagline">Classical deblurring in your browser. No AI, no trained models,
+    no server. Drop in any blurred photo and get the restored photo back.</p>
+  </header>
+
+  <section class="card">
+    <h2>Your photo stays on your device</h2>
+    <p><strong>The image never leaves your device.</strong> There is no server and no
+    upload. This page downloads a Python engine once, then runs the exact same
+    deblur code that ships in this project, inside your browser, on your machine.
+    Nothing about your photo is sent anywhere, and the run report below is written
+    by the engine itself.</p>
+    <p><strong>First load is heavy.</strong> The engine (Pyodide, which is Python
+    running on WebAssembly, plus the OpenCV and scikit-image libraries) is about
+    65 MB to download. On a slow connection that can take a minute or more. After
+    the first load your browser caches it, and later visits start much faster.</p>
+    <p><strong>How a run works.</strong> The blur is identified on a working copy
+    capped at 900 pixels on its long side, because browser math is slow. The
+    winning settings are then applied once, at full size, to your original photo.
+    Restoration of a large photo can still take a while. The stage line under the
+    button always shows what the engine is doing.</p>
+    <p><strong>Honest limits.</strong> Classical processing sharpens and clarifies
+    what is in the image. It cannot invent real detail that heavy blur destroyed,
+    and blur that changes across one photo is only partly helped. Photos over
+    40 megapixels are refused with a message instead of being allowed to crash
+    the tab.</p>
+  </section>
+
+  <section class="card">
+    <h2>1. Pick a blurred photo</h2>
+    <div id="drop" role="button" tabindex="0" aria-label="Choose an image file">
+      <p class="big">Drop an image here, or tap to choose one</p>
+      <p>JPG, PNG, WebP and most other image formats the browser can open.</p>
+      <p id="fileName">No file chosen yet.</p>
+    </div>
+    <input type="file" id="file" accept="image/*" class="hidden">
+
+    <div class="controls">
+      <div class="field">
+        <label for="blurType">Blur type</label>
+        <select id="blurType">
+          <option value="auto" selected>auto: figure it out</option>
+          <option value="motion">motion: camera or subject moved</option>
+          <option value="focus">focus: out of focus</option>
+          <option value="gaussian">gaussian: general softness</option>
+          <option value="lowres">low resolution: upscale only</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="method">Restoration method</label>
+        <select id="method">
+          <option value="rl-tv" selected>RL with TV (default, least ringing)</option>
+          <option value="wiener">Wiener (fast, softer)</option>
+          <option value="rl">Richardson-Lucy (raw, can ring)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="upscale">Upscale target (long side)</label>
+        <select id="upscale">
+          <option value="none">none: keep original size</option>
+          <option value="1920">1920 px</option>
+          <option value="3840" selected>3840 px (default)</option>
+        </select>
+      </div>
+      <div class="field check">
+        <input type="checkbox" id="denoise" checked>
+        <label for="denoise">Light denoise first</label>
+      </div>
+      <button id="run" disabled>Run deblur</button>
+      <a id="download" download="deblurred.png">Download result (PNG)</a>
+    </div>
+
+    <div id="stage"><div id="spinner"></div><span id="stageText">Loading the engine. This is the heavy first load.</span></div>
+    <div id="error" role="alert"></div>
+  </section>
+
+  <section class="card hidden" id="resultsCard">
+    <h2>2. Before and after</h2>
+    <div class="pair">
+      <figure>
+        <img id="beforeImg" alt="Your original photo">
+        <figcaption>Before (your original)</figcaption>
+      </figure>
+      <figure>
+        <img id="afterImg" alt="The restored photo">
+        <figcaption>After (restored by the engine)</figcaption>
+      </figure>
+    </div>
+    <h2 style="margin-top: 20px;">Run report</h2>
+    <pre id="report"></pre>
+  </section>
+
+  <section class="card">
+    <h2>About this page</h2>
+    <p>This is the browser front end for the Frozen In Flames Deblur toolkit.
+    The engine is the project's own Python package, copied file for file from
+    the <code>deblur/</code> folder of the repository and run under
+    <strong>Pyodide 0.29.5</strong> (Python 3.13 on WebAssembly), with numpy,
+    scipy, OpenCV and scikit-image from the Pyodide package set. It is not a
+    reimplementation in another language: the same sweep, the same scoring,
+    the same deconvolution.</p>
+    <p>Two staging choices exist only because a browser is slow: blur
+    estimation runs on the capped working copy described above, and denoising
+    is skipped with a note in the run report if the OpenCV build in your
+    browser lacks it (the pinned build has it). No engine math changes.</p>
+    <p>Prefer the command line, or want to read the code? The repository is at
+    <a href="https://github.com/Frozen-In-Flames/frozen-in-flames-deblur">github.com/Frozen-In-Flames/frozen-in-flames-deblur</a>.
+    License: Apache-2.0, Copyright 2026 Aries Hilton.</p>
+  </section>
+
+  <footer>Served as a static page by GitHub Pages. The only downloads this page
+  makes are its own engine files from this site and the Pyodide runtime and
+  libraries from the jsDelivr CDN. No trackers, no accounts, no uploads.</footer>
+</main>
+<noscript><p style="text-align:center">This page needs JavaScript: the engine runs in your browser.</p></noscript>
+
+<script id="worker-src" type="text/plain">
+"use strict";
+const PYODIDE_VERSION = "0.29.5";
+const INDEX_URL = "https://cdn.jsdelivr.net/pyodide/v" + PYODIDE_VERSION + "/full/";
+const ENGINE_FILES = ["__init__.py", "__main__.py", "browser.py", "cli.py",
+  "deconv.py", "pipeline.py", "presets.py", "psf.py", "scoring.py"];
+let pyodide = null;
+let pageBase = null;
+
+function stage(text) { postMessage({ type: "stage", stage: text }); }
+
+async function init() {
+  stage("Loading Python engine (Pyodide " + PYODIDE_VERSION + ", about 65 MB on first load)");
+  importScripts(INDEX_URL + "pyodide.js");
+  pyodide = await loadPyodide({ indexURL: INDEX_URL });
+  stage("Loading image libraries (numpy, scipy, OpenCV, scikit-image)");
+  await pyodide.loadPackage(["numpy", "scipy", "opencv-python", "scikit-image"]);
+  stage("Loading the deblur engine from this site");
+  pyodide.FS.mkdir("deblur");
+  for (const name of ENGINE_FILES) {
+    const url = new URL("deblur/" + name, pageBase).href;
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error("could not load engine file " + name + " (" + resp.status + ")");
+    pyodide.FS.writeFile("deblur/" + name, await resp.text());
+  }
+  const probe = pyodide.runPython([
+    "import json, cv2, numpy as np",
+    "from deblur.browser import estimate_settings",
+    "from deblur.pipeline import enhance_image",
+    "from deblur.presets import Settings",
+    "_probe = np.zeros((2, 2, 3), np.uint8)",
+    "_ok, _buf = cv2.imencode('.png', _probe)",
+    "_info = {'cv2': cv2.__version__, 'denoise': bool(hasattr(cv2, 'fastNlMeansDenoisingColored')), 'png_encode': bool(_ok)}",
+    "json.dumps(_info)",
+  ].join("\n"));
+  pyodide.runPython([
+    "import json",
+    "_state = {}",
+    "def glue_estimate(blur_type, method, denoise):",
+    "    arr = np.frombuffer(open('input.bin', 'rb').read(), np.uint8)",
+    "    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)",
+    "    if img is None:",
+    "        raise ValueError('could not decode that image in the engine')",
+    "    _state['img'] = img",
+    "    s = Settings(blur_type=blur_type, method=method, denoise=bool(denoise), upscale=None)",
+    "    pinned, info = estimate_settings(img, s)",
+    "    _state['pinned'] = pinned",
+    "    out = {'input_size': [int(img.shape[1]), int(img.shape[0])],",
+    "           'estimated': bool(info.get('estimated')),",
+    "           'blur_type': info.get('blur_type', blur_type),",
+    "           'psf_params': info.get('psf_params', {}),",
+    "           'null_match': info.get('null_match'),",
+    "           'notes': list(info.get('notes', [])),",
+    "           'candidates': [[f, p, sc, nm] for f, p, sc, nm in info.get('candidates', [])]}",
+    "    return json.dumps(out)",
+    "def glue_restore(upscale):",
+    "    s = _state['pinned']",
+    "    s.upscale = None if upscale is None else int(upscale)",
+    "    out, rep = enhance_image(_state['img'], s)",
+    "    ok, buf = cv2.imencode('.png', out)",
+    "    if not ok:",
+    "        from PIL import Image",
+    "        import io",
+    "        bio = io.BytesIO()",
+    "        Image.fromarray(cv2.cvtColor(out, cv2.COLOR_BGR2RGB)).save(bio, format='PNG')",
+    "        open('output.png', 'wb').write(bio.getvalue())",
+    "    else:",
+    "        open('output.png', 'wb').write(buf.tobytes())",
+    "    return json.dumps({'blur_type': rep.blur_type, 'psf_params': rep.psf_params,",
+    "                       'method': rep.method, 'manual': bool(rep.manual),",
+    "                       'input_score': rep.input_score, 'output_score': rep.output_score,",
+    "                       'input_size': list(rep.input_size), 'output_size': list(rep.output_size),",
+    "                       'steps': list(rep.steps)})",
+  ].join("\n"));
+  postMessage({ type: "ready", probe: JSON.parse(probe) });
+}
+
+async function run(msg) {
+  pyodide.FS.writeFile("input.bin", new Uint8Array(msg.bytes));
+  stage("Estimating blur on a working copy (long side capped at 900 px)");
+  const estJson = pyodide.runPython(
+    "glue_estimate(" + JSON.stringify(msg.blurType) + ", " +
+    JSON.stringify(msg.method) + ", " + (msg.denoise ? "True" : "False") + ")");
+  const est = JSON.parse(estJson);
+  postMessage({ type: "estimate", est: est });
+  stage("Restoring at full size. Large photos can take a while here");
+  const repJson = pyodide.runPython(
+    "glue_restore(" + (msg.upscale === null ? "None" : String(msg.upscale)) + ")");
+  const rep = JSON.parse(repJson);
+  stage("Encoding the result as PNG");
+  const out = pyodide.FS.readFile("output.png");
+  postMessage({ type: "result", rep: rep, bytes: out.buffer }, [out.buffer]);
+}
+
+onmessage = async (e) => {
+  const msg = e.data;
+  try {
+    if (msg.type === "init") {
+      pageBase = msg.base;
+      await init();
+    } else if (msg.type === "run") {
+      await run(msg);
+    }
+  } catch (err) {
+    postMessage({ type: "error", error: String(err && err.message ? err.message : err) });
+  }
+};
+</script>
+
+<script>
+"use strict";
+const MAX_PIXELS = 40000000;
+const $ = (id) => document.getElementById(id);
+const worker = new Worker(URL.createObjectURL(
+  new Blob([$("worker-src").textContent], { type: "text/javascript" })));
+let engineReady = false;
+let chosenFile = null;
+let chosenDims = null;
+let beforeUrl = null;
+let afterUrl = null;
+
+function setStage(text, busy) {
+  $("stageText").textContent = text;
+  $("spinner").style.visibility = busy ? "visible" : "hidden";
+}
+function setError(text) { $("error").textContent = text || ""; }
+function updateRunButton() { $("run").disabled = !(engineReady && chosenFile); }
+
+worker.onmessage = (e) => {
+  const msg = e.data;
+  if (msg.type === "stage") {
+    setStage(msg.stage, true);
+  } else if (msg.type === "ready") {
+    engineReady = true;
+    setStage("Engine ready (OpenCV " + msg.probe.cv2 +
+      ", denoise " + (msg.probe.denoise ? "available" : "unavailable in this build") +
+      "). Pick a photo and run it.", false);
+    updateRunButton();
+  } else if (msg.type === "estimate") {
+    const est = msg.est;
+    if (est.estimated) {
+      setStage("Blur identified: " + est.blur_type + " " +
+        JSON.stringify(est.psf_params) + ". Restoring at full size.", true);
+    }
+  } else if (msg.type === "result") {
+    const blob = new Blob([msg.bytes], { type: "image/png" });
+    if (afterUrl) URL.revokeObjectURL(afterUrl);
+    afterUrl = URL.createObjectURL(blob);
+    $("afterImg").src = afterUrl;
+    const dl = $("download");
+    dl.href = afterUrl;
+    dl.style.display = "inline-block";
+    dl.setAttribute("download",
+      (chosenFile.name.replace(/\.[^.]+$/, "") || "photo") + "_deblurred.png");
+    const r = msg.rep;
+    const lines = [
+      "blur type    : " + r.blur_type + (r.manual ? "  (parameters pinned by the estimator)" : ""),
+      "psf params   : " + JSON.stringify(r.psf_params),
+      "method       : " + r.method,
+      "input        : " + r.input_size[0] + "x" + r.input_size[1],
+      "output       : " + r.output_size[0] + "x" + r.output_size[1],
+      "score in/out : " + r.input_score.toFixed(5) + " -> " + r.output_score.toFixed(5) +
+        "  (edge steepness, higher is sharper; compare at equal size)",
+      "steps        : " + r.steps.join("; "),
+    ];
+    $("report").textContent = lines.join("\n");
+    $("resultsCard").classList.remove("hidden");
+    setStage("Done. The restored photo is below, and the download button is ready.", false);
+    $("run").disabled = false;
+  } else if (msg.type === "error") {
+    setError("The engine hit a problem: " + msg.error);
+    setStage("Stopped on an error. You can adjust the settings and run again.", false);
+    $("run").disabled = false;
+  }
+};
+worker.onerror = (e) => {
+  setError("The engine worker failed: " + (e.message || "unknown error"));
+  setStage("Engine failed to load.", false);
+};
+worker.postMessage({ type: "init", base: location.href });
+
+async function acceptFile(file) {
+  setError("");
+  chosenFile = null; chosenDims = null;
+  if (!file) return;
+  if (!file.type || file.type.indexOf("image/") !== 0) {
+    setError("That file is not an image the browser can open. Try a JPG or PNG.");
+    return;
+  }
+  try {
+    const bmp = await createImageBitmap(file);
+    chosenDims = [bmp.width, bmp.height];
+    bmp.close();
+  } catch (err) {
+    setError("The browser could not open that image. Try a JPG or PNG.");
+    return;
+  }
+  const pixels = chosenDims[0] * chosenDims[1];
+  if (pixels > MAX_PIXELS) {
+    setError("That photo is " + chosenDims[0] + "x" + chosenDims[1] + " (about " +
+      Math.round(pixels / 1000000) + " megapixels), over this page's 40 megapixel cap. " +
+      "Shrink it first, or run the command line tool from the repository, which has no cap.");
+    return;
+  }
+  chosenFile = file;
+  $("fileName").textContent = file.name + "  (" + chosenDims[0] + "x" + chosenDims[1] + ")";
+  if (beforeUrl) URL.revokeObjectURL(beforeUrl);
+  beforeUrl = URL.createObjectURL(file);
+  $("beforeImg").src = beforeUrl;
+  $("resultsCard").classList.remove("hidden");
+  updateRunButton();
+}
+
+const drop = $("drop"), fileInput = $("file");
+drop.addEventListener("click", () => fileInput.click());
+drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") fileInput.click(); });
+fileInput.addEventListener("change", () => acceptFile(fileInput.files[0]));
+["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => {
+  e.preventDefault(); drop.classList.add("drag");
+}));
+["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => {
+  e.preventDefault(); drop.classList.remove("drag");
+}));
+drop.addEventListener("drop", (e) => {
+  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) acceptFile(f);
+});
+
+$("run").addEventListener("click", async () => {
+  if (!chosenFile || !engineReady) return;
+  setError("");
+  $("run").disabled = true;
+  setStage("Reading your photo on this device", true);
+  const buf = await chosenFile.arrayBuffer();
+  const up = $("upscale").value;
+  worker.postMessage({
+    type: "run",
+    bytes: buf,
+    blurType: $("blurType").value,
+    method: $("method").value,
+    denoise: $("denoise").checked,
+    upscale: up === "none" ? null : parseInt(up, 10),
+    name: chosenFile.name,
+  }, [buf]);
+});
+</script>
+</body>
+</html>
