@@ -104,6 +104,19 @@
   </section>
 
   <section class="card">
+    <h2>Live view: clarify what the camera sees, as it happens</h2>
+    <p>For camera glasses and phone cameras there is a companion page: the
+    <a href="live.html">live clarify view</a>. It runs a fast clarity chain
+    on the camera feed, on your device (temporal noise reduction, contrast,
+    a measured de-smear, sharpening that follows the zoom), with a big
+    toggle so the raw view is always one tap away, and a capture button
+    that freezes a frame and hands it to the full engine on this page. It
+    is a clarify chain, not this engine; the honest split between the two
+    speeds is written up in the project's glasses architecture note
+    (<code>docs/glasses.md</code> in the repository).</p>
+  </section>
+
+  <section class="card">
     <h2>1. Pick a blurred photo</h2>
     <div id="drop" role="button" tabindex="0" aria-label="Choose an image file">
       <p class="big">Drop an image here, or tap to choose one</p>
@@ -457,6 +470,32 @@ $("run").addEventListener("click", async () => {
     name: chosenFile.name,
   }, [buf]);
 });
+
+// Live-view handoff: the live page (live.html) freezes a camera frame
+// and stores it in this browser's on-device storage under
+// "capture", then sends the user here with #capture. Pick it up,
+// delete it, and treat it exactly like a chosen file. Nothing about
+// the frame ever leaves the device.
+if (location.hash === "#capture") {
+  history.replaceState(null, "", location.pathname);
+  try {
+    const req = indexedDB.open("fif-deblur-handoff", 1);
+    req.onupgradeneeded = () => req.result.createObjectStore("kv");
+    req.onsuccess = () => {
+      const db = req.result;
+      const store = db.transaction("kv", "readwrite").objectStore("kv");
+      const get = store.get("capture");
+      get.onsuccess = () => {
+        const blob = get.result;
+        store.delete("capture");
+        if (blob) {
+          acceptFile(new File([blob], "live-capture.png",
+            { type: "image/png" }));
+        }
+      };
+    };
+  } catch (err) { /* the handoff is best-effort; the drop zone works */ }
+}
 </script>
 </body>
 </html>

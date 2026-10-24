@@ -28,6 +28,14 @@ so). If the auto decision on the working copy is "noise" or
 "identity", the pinned settings are simply that blur_type and the
 full-size run takes the matching no-deconvolution path.
 
+Zoom (v0.4.0): the staged pins are in the full-size image's own
+pixel space, and enhance_image reads manual pins as sensor-space
+values to be scaled by Settings.zoom. The pinned settings therefore
+carry zoom=1.0, so the restoration applies exactly the staged
+parameters; sensor-space relabeling is a CLI/pipeline feature the
+photo page does not expose (a caller holding a zoom value can
+divide the reported parameters by it).
+
 One environment adaptation lives here, behind a feature detect: if
 cv2.fastNlMeansDenoisingColored is missing from the OpenCV build in
 use (it is present in the pinned Pyodide build, opencv-python
@@ -67,11 +75,16 @@ def _scale_params(family, params, k):
 
 
 def _pinned_settings(settings, family, params):
-    """A copy of settings with exactly family's parameters pinned."""
+    """A copy of settings with exactly family's parameters pinned.
+
+    zoom is pinned to 1.0: the parameters are already in the
+    full-size image's pixel space, and enhance_image would
+    otherwise scale sensor-space pins by the caller's zoom a
+    second time (see the module docstring)."""
     pins = {"length": None, "angle": None, "radius": None, "sigma": None}
     for key, value in params.items():
         pins[key] = float(value)
-    return replace(settings, blur_type=family, **pins)
+    return replace(settings, blur_type=family, zoom=1.0, **pins)
 
 
 def estimate_settings(image, settings=None, max_side=ESTIMATE_MAX_SIDE):

@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Frozen In Flames Deblur - live clarify view</title>
+<meta name="description" content="A live clarify view for camera glasses and phone cameras: temporal noise reduction, contrast, sharpening and a measured de-smear, on your device, with an instant on/off toggle.">
+<style>
+  :root {
+    --bg: #101014; --panel: #1a1a21; --panel2: #22222c; --line: #34343f;
+    --text: #ececf1; --dim: #a7a7b5; --fire: #ff7a29; --ice: #57c7ff;
+    --ok: #63d68a; --err: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--text); line-height: 1.5; }
+  main { max-width: 1060px; margin: 0 auto; padding: 28px 18px 60px; }
+  h1 { font-size: 2rem; margin: 0 0 4px; }
+  h1 .fire { color: var(--fire); } h1 .ice { color: var(--ice); }
+  .tagline { color: var(--dim); margin: 0 0 22px; font-size: 1.05rem; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+          padding: 18px; margin-bottom: 18px; }
+  .card h2 { margin: 0 0 10px; font-size: 1.1rem; }
+  .card p { margin: 6px 0; color: var(--dim); }
+  .card p strong, .card li strong { color: var(--text); }
+  ul { margin: 6px 0; padding-left: 20px; color: var(--dim); }
+  #view { width: 100%; border-radius: 8px; border: 1px solid var(--line);
+          background: #000; display: block; }
+  #toggle { width: 100%; min-height: 76px; font-size: 1.35rem; font-weight: 700;
+            border-radius: 12px; border: 2px solid var(--ice); cursor: pointer;
+            background: var(--ice); color: #0b141a; margin: 14px 0 4px; }
+  #toggle[aria-pressed="false"] { background: var(--panel2); color: var(--text);
+            border-color: var(--line); }
+  .controls { display: flex; flex-wrap: wrap; gap: 18px; align-items: end; margin-top: 14px; }
+  .field { display: flex; flex-direction: column; gap: 5px; min-width: 200px; flex: 1; }
+  .field label { font-size: 0.95rem; color: var(--text); }
+  .field output { color: var(--ice); font-weight: 600; }
+  input[type="range"] { width: 100%; accent-color: var(--fire); height: 32px; }
+  select, button { font-size: 1rem; padding: 9px 12px; border-radius: 8px;
+                   border: 1px solid var(--line); background: var(--panel2); color: var(--text); }
+  button { cursor: pointer; }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  #start { background: var(--fire); border-color: var(--fire); color: #16100b; font-weight: 700; }
+  #capture { background: var(--ice); border-color: var(--ice); color: #0b141a; font-weight: 700; }
+  #readouts { display: flex; flex-wrap: wrap; gap: 8px 26px; margin-top: 14px;
+              font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.95rem; }
+  #readouts span b { color: var(--ice); font-weight: 600; }
+  #error { color: var(--err); margin-top: 10px; white-space: pre-wrap; }
+  .hidden { display: none; }
+  footer { color: var(--dim); font-size: 0.9rem; margin-top: 26px; }
+  footer a, .card a { color: var(--ice); }
+  code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1><span class="fire">Frozen In Flames</span> <span class="ice">Deblur</span> — live view</h1>
+    <p class="tagline">Live clarify for camera glasses and phone cameras. A fast
+    clarity chain on the camera feed, for seeing words, faces and the room more
+    clearly as it happens. It is <strong>not</strong> the full deblurring engine:
+    that works on stills and recorded clips, on the
+    <a href="index.html">photo page</a>.</p>
+  </header>
+
+  <section class="card">
+    <h2>What this is, honestly</h2>
+    <p><strong>Live clarify, not live deblurring.</strong> The full engine takes
+    seconds per photo; no live feed can run it frame by frame. This page runs the
+    fast chain that CAN run live, at a capped processing resolution: temporal
+    noise reduction (still pixels blend with the previous frame, moving pixels
+    do not, so nothing smears), contrast (CLAHE on brightness), a measured
+    de-smear (the camera's motion between frames is measured by phase
+    correlation and one small directional sharpening step is taken along it),
+    and sharpening whose strength follows the zoom. It clarifies what the
+    camera captured. It does not invent detail, and the frame rate readout
+    below is your device's real number.</p>
+    <p><strong>The camera feed never leaves your device.</strong> There is no
+    server and no upload, and this page downloads nothing beyond its own files
+    from this site: no engine, no libraries, no trackers. It works with any
+    camera your browser can open, including camera glasses that present as a
+    camera: the glasses are the camera, the phone running this page is the
+    processor. That split is the design; the architecture note is
+    <code>docs/glasses.md</code> in the
+    <a href="https://github.com/Frozen-In-Flames/frozen-in-flames-deblur">project repository</a>.</p>
+    <p><strong>Zoom.</strong> The zoom slider crops and enlarges the view.
+    Zooming magnifies blur and noise together with the picture, so the clarity
+    strength rises with the zoom automatically, and the processing resolution
+    stays capped: past a point you are enlarging, not resolving.</p>
+  </section>
+
+  <section class="card">
+    <h2>Live view</h2>
+    <button id="start">Start camera</button>
+    <p id="camNote">The browser will ask for camera permission. On a phone the
+    rear camera is used by default.</p>
+    <canvas id="view" class="hidden" width="640" height="360"></canvas>
+    <button id="toggle" aria-pressed="true" disabled>Enhancement: ON (tap or press E for the raw view)</button>
+    <div class="controls">
+      <div class="field">
+        <label for="clarity">Clarity (sharpening) <output id="clarityVal">1.00</output></label>
+        <input type="range" id="clarity" min="0" max="2" step="0.05" value="1">
+      </div>
+      <div class="field">
+        <label for="zoom">Zoom <output id="zoomVal">1.0x</output></label>
+        <input type="range" id="zoom" min="1" max="4" step="0.1" value="1">
+      </div>
+      <div class="field">
+        <button id="capture" disabled>Capture still and restore it with the full engine</button>
+      </div>
+    </div>
+    <div id="readouts">
+      <span>frame rate <b id="fps">-</b></span>
+      <span>processing at <b id="procres">-</b></span>
+      <span>camera motion <b id="motion">-</b></span>
+    </div>
+    <div id="error" role="alert"></div>
+    <p>Capture freezes the framed view at full camera resolution and hands it
+    to the photo page, which restores it with the full engine (its first load
+    there is heavy, about 65 MB, cached afterwards). Nothing is uploaded in
+    the handoff: the frame passes through your browser's own on-device
+    storage and is deleted from it once the photo page picks it up.</p>
+  </section>
+
+  <footer>Served as a static page by GitHub Pages. This page makes no
+  downloads beyond its own files from this site, and sends nothing anywhere.
+  The full engine, the recorded-video mode and the command line tool are in
+  the repository. License: Apache-2.0, Copyright 2026 Aries Hilton.</footer>
+</main>
+<noscript><p style="text-align:center">This page needs JavaScript: the clarify chain runs in your browser.</p></noscript>
+
+<script src="live-math.js"></script>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const AW = 128, AH = 64;              // motion-analysis resolution (powers of two)
+const PROC_MAX_W = 640;               // processing resolution cap, px wide
+const DESMEAR_STRENGTH = 0.5;         // the measured operating point (see live-math.js)
+
+let stream = null, video = null;
+let procW = 640, procH = 360;
+let enhanceOn = true;
+let prevGray = null;                  // Float32Array AW*AH
+let prevInput = null;                 // Uint8ClampedArray, previous raw frame RGBA
+let motion = { dx: 0, dy: 0, response: 0 };
+let fpsEMA = 0, lastT = 0, lastReadout = 0;
+
+const view = $("view");
+const vctx = view.getContext("2d", { willReadFrequently: true });
+const ana = document.createElement("canvas");
+ana.width = AW; ana.height = AH;
+const actx = ana.getContext("2d", { willReadFrequently: true });
+
+function setError(text) { $("error").textContent = text || ""; }
+
+// CLAHE on a brightness plane (0..255 floats): per-tile clipped
+// histogram equalization with bilinear blending between tile LUTs.
+function claheLuma(Y, w, h, tilesX = 8, tilesY = 8, clipLimit = 2.5) {
+  const tileW = Math.ceil(w / tilesX), tileH = Math.ceil(h / tilesY);
+  const luts = [];
+  for (let ty = 0; ty < tilesY; ty++) {
+    for (let tx = 0; tx < tilesX; tx++) {
+      const x0 = tx * tileW, y0 = ty * tileH;
+      const x1 = Math.min(w, x0 + tileW), y1 = Math.min(h, y0 + tileH);
+      const hist = new Float64Array(256);
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+        hist[Math.max(0, Math.min(255, Math.round(Y[y * w + x])))]++;
+      }
+      const count = (x1 - x0) * (y1 - y0);
+      const clip = clipLimit * count / 256;
+      let excess = 0;
+      for (let i = 0; i < 256; i++) {
+        if (hist[i] > clip) { excess += hist[i] - clip; hist[i] = clip; }
+      }
+      const add = excess / 256;
+      const lut = new Float32Array(256);
+      let cdf = 0;
+      for (let i = 0; i < 256; i++) { cdf += hist[i] + add; lut[i] = 255 * cdf / count; }
+      luts.push(lut);
+    }
+  }
+  const out = new Float32Array(Y.length);
+  for (let y = 0; y < h; y++) {
+    const fy = (y + 0.5) / tileH - 0.5;
+    const ty0 = Math.max(0, Math.floor(fy)), ty1 = Math.min(tilesY - 1, ty0 + 1);
+    const wy = Math.max(0, Math.min(1, fy - ty0));
+    for (let x = 0; x < w; x++) {
+      const fx = (x + 0.5) / tileW - 0.5;
+      const tx0 = Math.max(0, Math.floor(fx)), tx1 = Math.min(tilesX - 1, tx0 + 1);
+      const wx = Math.max(0, Math.min(1, fx - tx0));
+      const v = Math.max(0, Math.min(255, Math.round(Y[y * w + x])));
+      const a = luts[ty0 * tilesX + tx0][v], b = luts[ty0 * tilesX + tx1][v];
+      const c = luts[ty1 * tilesX + tx0][v], d = luts[ty1 * tilesX + tx1][v];
+      out[y * w + x] = (a * (1 - wx) + b * wx) * (1 - wy) +
+                       (c * (1 - wx) + d * wx) * wy;
+    }
+  }
+  return out;
+}
+
+// Separable binomial blur ([1,4,6,4,1]/16), replicate borders.
+function blurPlane(src, w, h) {
+  const tmp = new Float32Array(src.length), out = new Float32Array(src.length);
+  const K = [1, 4, 6, 4, 1];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let s = 0;
+    for (let t = -2; t <= 2; t++) {
+      const cx = Math.min(w - 1, Math.max(0, x + t));
+      s += K[t + 2] * src[y * w + cx];
+    }
+    tmp[y * w + x] = s / 16;
+  }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let s = 0;
+    for (let t = -2; t <= 2; t++) {
+      const cy = Math.min(h - 1, Math.max(0, y + t));
+      s += K[t + 2] * tmp[cy * w + x];
+    }
+    out[y * w + x] = s / 16;
+  }
+  return out;
+}
+
+function processFrame(now) {
+  requestAnimationFrame(processFrame);
+  if (!video || video.readyState < 2) return;
+  if (lastT) {
+    const inst = 1000 / Math.max(1, now - lastT);
+    fpsEMA = fpsEMA ? fpsEMA * 0.9 + inst * 0.1 : inst;
+  }
+  lastT = now;
+
+  const zoom = parseFloat($("zoom").value);
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const sw = vw / zoom, sh = vh / zoom;
+  vctx.drawImage(video, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, procW, procH);
+
+  // Camera motion between this frame and the previous one, measured
+  // by phase correlation on a small grayscale copy.
+  actx.drawImage(view, 0, 0, AW, AH);
+  const anaData = actx.getImageData(0, 0, AW, AH).data;
+  const gray = new Float32Array(AW * AH);
+  for (let i = 0; i < AW * AH; i++) {
+    gray[i] = (anaData[i * 4] + 2 * anaData[i * 4 + 1] + anaData[i * 4 + 2]) / 4;
+  }
+  if (prevGray) {
+    const r = LiveMath.phaseCorrelation(prevGray, gray, AW, AH);
+    motion = {
+      dx: r.dx * (procW / AW), dy: r.dy * (procH / AH), response: r.response,
+    };
+  }
+  prevGray = gray;
+
+  const frame = vctx.getImageData(0, 0, procW, procH);
+  const cur = frame.data;
+  if (enhanceOn) {
+    const n = procW * procH;
+    const work = new Uint8ClampedArray(cur);
+    // 1. temporal noise reduction: still pixels blend with the
+    //    previous frame; a per-pixel gate kills the blend wherever
+    //    the pixel actually changed, so motion cannot smear.
+    if (prevInput && prevInput.length === cur.length) {
+      const alpha = LiveMath.temporalAlpha(Math.hypot(motion.dx, motion.dy));
+      for (let i = 0; i < n; i++) {
+        const j = i * 4;
+        const lc = (cur[j] + 2 * cur[j + 1] + cur[j + 2]) / 4;
+        const lp = (prevInput[j] + 2 * prevInput[j + 1] + prevInput[j + 2]) / 4;
+        const diff = Math.abs(lc - lp);
+        const gate = diff >= 26 ? 0 : 1 - diff / 26;
+        const a = alpha * gate;
+        if (a > 0.01) {
+          work[j] = cur[j] * (1 - a) + prevInput[j] * a;
+          work[j + 1] = cur[j + 1] * (1 - a) + prevInput[j + 1] * a;
+          work[j + 2] = cur[j + 2] * (1 - a) + prevInput[j + 2] * a;
+        }
+      }
+    }
+    // 2-4. brightness chain: CLAHE, measured de-smear, unsharp.
+    //    Color follows by the brightness ratio, as in the engine.
+    let Y = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const j = i * 4;
+      Y[i] = (work[j] + 2 * work[j + 1] + work[j + 2]) / 4;
+    }
+    Y = claheLuma(Y, procW, procH);
+    if (motion.response >= 0.25) {
+      Y = LiveMath.directionalDesmear(Y, procW, procH,
+        motion.dx, motion.dy, DESMEAR_STRENGTH);
+    }
+    const clarity = parseFloat($("clarity").value);
+    const amount = 0.8 * clarity * LiveMath.clarityForZoom(1, zoom);
+    if (amount > 0.01) {
+      const Yb = blurPlane(Y, procW, procH);
+      for (let i = 0; i < n; i++) Y[i] = Y[i] + amount * (Y[i] - Yb[i]);
+    }
+    for (let i = 0; i < n; i++) {
+      const j = i * 4;
+      const lc = (work[j] + 2 * work[j + 1] + work[j + 2]) / 4;
+      const ratio = Math.max(0, Math.min(3, Y[i] / Math.max(lc, 1)));
+      work[j] = work[j] * ratio;
+      work[j + 1] = work[j + 1] * ratio;
+      work[j + 2] = work[j + 2] * ratio;
+    }
+    frame.data.set(work);
+    vctx.putImageData(frame, 0, 0);
+  }
+  prevInput = new Uint8ClampedArray(cur);
+
+  if (now - lastReadout > 250) {
+    lastReadout = now;
+    $("fps").textContent = fpsEMA ? fpsEMA.toFixed(1) + " fps" : "-";
+    $("procres").textContent = procW + "x" + procH;
+    const mag = Math.hypot(motion.dx, motion.dy);
+    if (motion.response >= 0.25 && mag >= 0.1) {
+      const arrows = ["→", "↘", "↓", "↙", "←", "↖", "↑", "↗"];
+      const ang = (Math.atan2(motion.dy, motion.dx) * 180 / Math.PI + 360) % 360;
+      $("motion").textContent = mag.toFixed(1) + " px/frame " +
+        arrows[Math.round(ang / 45) % 8] +
+        " (response " + motion.response.toFixed(2) + ")";
+    } else {
+      $("motion").textContent = "still (response " +
+        motion.response.toFixed(2) + ")";
+    }
+  }
+}
+
+$("start").addEventListener("click", async () => {
+  setError("");
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setError("This browser does not expose a camera API. The live view " +
+      "needs a browser with camera access, on a phone or a computer " +
+      "with a camera (or camera glasses presenting as a camera).");
+    return;
+  }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment",
+               width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false,
+    });
+  } catch (err) {
+    setError("The camera could not be started: " + err.message +
+      ". Permission, or another app holding the camera, are the " +
+      "usual causes.");
+    return;
+  }
+  video = document.createElement("video");
+  video.srcObject = stream;
+  video.playsInline = true;
+  await video.play();
+  procW = Math.min(PROC_MAX_W, video.videoWidth);
+  procH = Math.round(procW * video.videoHeight / video.videoWidth);
+  view.width = procW;
+  view.height = procH;
+  view.classList.remove("hidden");
+  $("toggle").disabled = false;
+  $("capture").disabled = false;
+  $("start").disabled = true;
+  $("camNote").textContent = "Camera running. Everything below happens " +
+    "on this device.";
+  prevGray = null;
+  prevInput = null;
+  requestAnimationFrame(processFrame);
+});
+
+function setEnhance(on) {
+  enhanceOn = on;
+  $("toggle").setAttribute("aria-pressed", on ? "true" : "false");
+  $("toggle").textContent = on
+    ? "Enhancement: ON (tap or press E for the raw view)"
+    : "Enhancement: OFF — raw view (tap or press E to enhance)";
+}
+$("toggle").addEventListener("click", () => setEnhance(!enhanceOn));
+document.addEventListener("keydown", (e) => {
+  if (!video) return;
+  if (e.key === "e" || e.key === "E") {
+    setEnhance(!enhanceOn);
+  } else if (e.key === " " && (e.target === document.body || e.target === view)) {
+    e.preventDefault();
+    setEnhance(!enhanceOn);
+  }
+});
+$("clarity").addEventListener("input", () => {
+  $("clarityVal").textContent = parseFloat($("clarity").value).toFixed(2);
+});
+$("zoom").addEventListener("input", () => {
+  $("zoomVal").textContent = parseFloat($("zoom").value).toFixed(1) + "x";
+});
+
+// Capture still: freeze the framed view at full camera resolution
+// and hand it to the photo page through on-device browser storage.
+function saveHandoff(blob) {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open("fif-deblur-handoff", 1);
+    req.onupgradeneeded = () => req.result.createObjectStore("kv");
+    req.onsuccess = () => {
+      const db = req.result;
+      const tx = db.transaction("kv", "readwrite");
+      tx.objectStore("kv").put(blob, "capture");
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => reject(tx.error);
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+$("capture").addEventListener("click", () => {
+  if (!video) return;
+  const zoom = parseFloat($("zoom").value);
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const sw = Math.round(vw / zoom), sh = Math.round(vh / zoom);
+  const c = document.createElement("canvas");
+  c.width = sw; c.height = sh;
+  c.getContext("2d").drawImage(video, (vw - sw) / 2, (vh - sh) / 2, sw, sh,
+    0, 0, sw, sh);
+  c.toBlob(async (blob) => {
+    if (!blob) { setError("The still could not be encoded."); return; }
+    try {
+      await saveHandoff(blob);
+      location.href = "index.html#capture";
+    } catch (err) {
+      setError("The handoff to the photo page failed: " + err.message);
+    }
+  }, "image/png");
+});
+</script>
+</body>
+</html>

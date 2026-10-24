@@ -5,7 +5,11 @@ with swept, scored PSF settings; handles low-resolution inputs with
 an upscale + gentle sharpen path; treats noise-dominated images with
 a dedicated strong-denoise setting (no deconvolution); and restores
 foreground and background separately in segmented mode, each with
-its own estimated PSF. Built on OpenCV, scikit-image, numpy.
+its own estimated PSF. Parameters are zoom-aware (Settings.zoom:
+readings and pins in sensor space, restoration in view space), and
+recorded video is handled by deblur.video (sampled estimation, a
+temporally smoothed PSF track, per-frame restoration). Built on
+OpenCV, scikit-image, numpy.
 """
 
 from .browser import enhance_image_browser, estimate_settings
@@ -14,7 +18,7 @@ from .presets import PRESETS, Settings
 from .psf import build_psf, disk_psf, gaussian_psf, motion_psf
 from .scoring import estimate_noise_sigma, score_breakdown, score_image
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "enhance_image",
