@@ -25,6 +25,10 @@ accessibility aid (see "Camera glasses" below):
 | `segmented` | Foreground and background blurred differently | Edge-mask segmentation into two regions, a PSF estimated per region, the frame restored once per region and composited through the feathered mask (see below) |
 | `auto` | You don't know which one you have | Sweeps all families; motion must prove itself with a spectral fingerprint (see below); picks the noise path when no blur family earns a deconvolution, and reports `identity` when the photo already reads as sharp |
 
+## Live demonstration
+
+- [Frozen In Flames Deblur](https://frozen-in-flames.github.io/frozen-in-flames-deblur/): the deblurring pipeline running in the browser; an uploaded image is processed locally.
+
 ## Browser demo
 
 **Live page: https://frozen-in-flames.github.io/frozen-in-flames-deblur/**
